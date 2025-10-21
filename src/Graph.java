@@ -4,16 +4,14 @@ import java.awt.Color;
 
 public class Graph {
     private final Map<Node, List<Edge>> adjacencyList;
+    private final Map<String, Node> nodeNameMap; // For quick lookup by name
 
-    // --- Visualization Helpers (Define colors/steps used by the Visualizer) ---
     private static final Color FRONTIER_NODE_COLOR = new Color(255, 193, 7); // Yellow/Orange
     private static final Color VISITED_NODE_COLOR = new Color(108, 117, 125); // Gray (Closed Set)
     private static final Color PATH_NODE_COLOR = new Color(40, 167, 69); // Green (Final Path)
     private static final Color VISITED_EDGE_COLOR = new Color(0, 123, 255); // Brighter Blue
     private static final Color PATH_EDGE_COLOR = new Color(25, 135, 84); // Darker Green
     
-    // Wrapper for algorithms that return both metrics and the full trace
-    // This must also be a standalone class or defined outside a method if used publicly
     public static class AlgorithmTraceResult {
         public final PathResult finalResult;
         public final List<Node> finalPath; // Easier to access final path
@@ -30,15 +28,34 @@ public class Graph {
 
     public Graph() {
         adjacencyList = new HashMap<>();
+        nodeNameMap = new HashMap<>();
     }
 
+    public void addNode(String name, int x, int y) {
+        Node newNode = new Node(name, x, y); // Assumes Node constructor (name, x, y)
+        if (!nodeNameMap.containsKey(name)) {
+            nodeNameMap.put(name, newNode);
+            adjacencyList.putIfAbsent(newNode, new ArrayList<>());
+        }
+    }
+    
+    // Original: Used for sample/internal graph creation
     public void addNode(Node node) {
-        adjacencyList.putIfAbsent(node, new ArrayList<>());
+        if (!nodeNameMap.containsKey(node.getName())) {
+            nodeNameMap.put(node.getName(), node);
+            adjacencyList.putIfAbsent(node, new ArrayList<>());
+        }
+    }
+
+    // 💡 NEW: Method to retrieve a node by name (CRITICAL for Main.java)
+    public Node getNode(String name) {
+        return nodeNameMap.get(name);
     }
 
     public Set<Node> getNodes() {
         return adjacencyList.keySet();
     }
+
     
     public void addEdge(Node source, Node destination, int weight) {
         adjacencyList.putIfAbsent(source, new ArrayList<>());
@@ -286,76 +303,64 @@ public class Graph {
         return new PathResult(path, cost, visited.size(), endTime - startTime);
     }
 
-    /** Tracing version of Dijkstra */
-    public AlgorithmTraceResult dijkstraWithTrace(Node start, Node goal) {
-        long startTime = System.nanoTime();
-        Map<Node, Integer> dist = new HashMap<>();
-        Map<Node, Node> prev = new HashMap<>();
-        List<AnimationStep> trace = new ArrayList<>();
-        Set<Node> closedSet = new HashSet<>();
-        int visitedCount = 0;
+public AlgorithmTraceResult dijkstraWithTrace(Node start, Node goal) {
+    long startTime = System.nanoTime();
+    Map<Node, Integer> dist = new HashMap<>();
+    Map<Node, Node> prev = new HashMap<>();
+    List<AnimationStep> trace = new ArrayList<>();
+    // closedSet tracks nodes for which the shortest path is finalized (visited/closed).
+    Set<Node> closedSet = new HashSet<>(); 
 
-        for (Node n : getNodes()) {
-            dist.put(n, Integer.MAX_VALUE);
-            prev.put(n, null);
-        }
-        
-        for (List<Edge> edges : adjacencyList.values()) {
-            for (Edge e : edges) {
-                dist.putIfAbsent(e.getDestination(), Integer.MAX_VALUE);
-                prev.putIfAbsent(e.getDestination(), null);
-            }
-        }
-
-        dist.put(start, 0);
-        
-        PriorityQueue<Node> pq = new PriorityQueue<>(Comparator.comparingInt(dist::get));
-        pq.add(start);
-        
-        trace.add(new AnimationStep(start.getName(), FRONTIER_NODE_COLOR, "Start Node: Added to Priority Queue (Cost: 0)"));
-        visitedCount++;
-
-        while (!pq.isEmpty()) {
-            Node current = pq.poll();
-
-            if (closedSet.contains(current)) continue;
-            
-            closedSet.add(current);
-            trace.add(new AnimationStep(current.getName(), VISITED_NODE_COLOR, "Extract Min: " + current.getName() + " (Cost: " + dist.get(current) + ")"));
-
-            if (current.equals(goal)) break;
-
-            for (Edge e : adjacencyList.getOrDefault(current, Collections.emptyList())) {
-                Node neigh = e.getDestination();
-                int alt = dist.get(current) + e.getWeight();
-                
-                trace.add(new AnimationStep(current.getName(), neigh.getName(), VISITED_EDGE_COLOR, "Relax Edge: " + current.getName() + " -> " + neigh.getName() + " (Weight: " + e.getWeight() + ")"));
-
-                if (alt < dist.getOrDefault(neigh, Integer.MAX_VALUE)) {
-                    dist.put(neigh, alt);
-                    prev.put(neigh, current);
-                    
-                    pq.remove(neigh); 
-                    pq.add(neigh);    
-
-                    trace.add(new AnimationStep(neigh.getName(), FRONTIER_NODE_COLOR, "Update Cost: " + neigh.getName() + " (New Cost: " + alt + ")"));
-                    
-                    if (!closedSet.contains(neigh)) {
-                        visitedCount++;
-                    }
-                }
-            }
-        }
-
-        long endTime = System.nanoTime();
-        List<Node> finalPath = reconstructPath(prev, start, goal);
-        int cost = dist.getOrDefault(goal, Integer.MAX_VALUE);
-        
-        addFinalPathTrace(trace, finalPath, prev);
-
-        PathResult result = new PathResult(finalPath, cost, closedSet.size(), endTime - startTime);
-        return new AlgorithmTraceResult(result, finalPath, trace);
+    // 1. Initialization (Simplified for clarity, assuming getNodes() works)
+    for (Node n : getNodes()) { 
+        dist.put(n, Integer.MAX_VALUE);
+        prev.put(n, null);
     }
+
+    dist.put(start, 0);
+    
+    PriorityQueue<Node> pq = new PriorityQueue<>(Comparator.comparingInt(dist::get));
+    pq.add(start);
+    
+    trace.add(new AnimationStep(start.getName(), FRONTIER_NODE_COLOR, "Start Node: Added to Priority Queue (Cost: 0)"));
+
+    while (!pq.isEmpty()) {
+        Node current = pq.poll();
+        
+        if (closedSet.contains(current)) continue;
+        
+        closedSet.add(current);
+        trace.add(new AnimationStep(current.getName(), VISITED_NODE_COLOR, "Extract Min: " + current.getName() + " (Cost: " + dist.get(current) + ")"));
+
+        if (current.equals(goal)) break;
+
+        for (Edge e : adjacencyList.getOrDefault(current, Collections.emptyList())) {
+            Node neigh = e.getDestination();
+            int alt = dist.get(current) + e.getWeight();
+            
+            trace.add(new AnimationStep(current.getName(), neigh.getName(), VISITED_EDGE_COLOR, "Relax Edge: " + current.getName() + " -> " + neigh.getName() + " (Weight: " + e.getWeight() + ")"));
+
+            if (alt < dist.getOrDefault(neigh, Integer.MAX_VALUE)) {
+                dist.put(neigh, alt);
+                prev.put(neigh, current);
+                pq.add(neigh); 
+
+                trace.add(new AnimationStep(neigh.getName(), FRONTIER_NODE_COLOR, "Update Cost: " + neigh.getName() + " (New Cost: " + alt + ")"));
+            }
+        }
+    }
+
+    long endTime = System.nanoTime();
+    List<Node> finalPath = reconstructPath(prev, start, goal);
+    int cost = dist.getOrDefault(goal, Integer.MAX_VALUE);
+    
+    // Assuming this method exists for visualization/tracing
+    addFinalPathTrace(trace, finalPath, prev); 
+
+    // 🛑 Final result uses closedSet.size(), not a separate, error-prone counter.
+    PathResult result = new PathResult(finalPath, cost, closedSet.size(), endTime - startTime);
+    return new AlgorithmTraceResult(result, finalPath, trace);
+}
     
 
     // ----------------- A* -----------------
@@ -551,5 +556,14 @@ public class Graph {
         }
         if (path.isEmpty() || !path.get(0).equals(start)) return Collections.emptyList();
         return path;
+    }
+
+    public void addDirectedEdge(Node node, Node node2, int weight) {
+        // TODO Auto-generated method stub
+        throw new UnsupportedOperationException("Unimplemented method 'addDirectedEdge'");
+    }
+
+    public Map getAdjacencyList() {
+        return this.adjacencyList;
     }
 }

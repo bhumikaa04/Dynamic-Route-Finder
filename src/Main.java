@@ -2,6 +2,13 @@ import java.util.List;
 
 public class Main {
     public static void main(String[] args) {
+        Graph g = createSampleGraph();
+
+        // Launch Swing visualization
+        GraphVisualizerSwing.launch(g);
+    }
+
+    private static Graph createSampleGraph() {
         Graph g = new Graph();
 
         Node A = new Node("A", 0, 0);
@@ -24,14 +31,6 @@ public class Main {
         System.out.println("Graph:");
         g.displayGraph();
 
-        // Run algorithms in console
-        List<Node> bfsPath = g.bfs(A, E);
-        System.out.println("\nBFS path A->E: " + bfsPath);
-
-        var dres = g.dijkstra(A, E);
-        System.out.println("\nDijkstra path A->E: " + dres.path + " cost=" + dres.cost + " visited=" + dres.visitedCount + " timeNs=" + dres.timeNs);
-
-        // Launch Swing visualization
-        GraphVisualizerSwing.launchVisualization(g);
+        return g; 
     }
 }

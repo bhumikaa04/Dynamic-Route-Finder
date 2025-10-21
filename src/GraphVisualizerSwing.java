@@ -1,611 +1,1178 @@
 import javax.swing.*;
+import javax.swing.border.EmptyBorder;
+import javax.swing.filechooser.FileNameExtensionFilter;
+import javax.swing.table.DefaultTableModel;
+
 import java.awt.*;
 import java.awt.event.*;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
+import java.io.File;
+import java.lang.reflect.Field;
 import java.util.*;
 import java.util.List;
 
 public class GraphVisualizerSwing {
-    private JFrame frame;
-    private JPanel graphPanel;
-    private JComboBox<String> startNodeCombo, goalNodeCombo;
-    private JTextArea metricsText;
-    private JLabel statusLabel;
-    private JProgressBar progressBar;
-    private JButton nextStepButton;
-    private JTextArea explanationText; // NEW: For detailed explanations
+    private static final Font UI_FONT = new Font("Segoe UI", Font.PLAIN, 13);
+    private static final Font TITLE_FONT = new Font("Segoe UI", Font.BOLD, 14);
 
+    private JFrame frame;
     private Graph graph;
-    private Map<String, Point> nodePositions = new HashMap<>();
-    private Map<String, Color> nodeColors = new HashMap<>();
-    private List<AnimationStep> currentTrace = Collections.emptyList();
-    private int currentStepIndex = 0;
+
+    // UI components
+    private GraphCanvas canvas;
+    private JComboBox<String> startCombo, goalCombo;
+    private JButton btnPlayPause, btnStep, btnReset;
+    private JToggleButton btnAuto;
+    private JSlider speedSlider;
+    private JLabel lblStatus, lblSpeedValue;
+    private JList<String> listFrontier, listVisited, listPath;
+    private DefaultListModel<String> frontierModel = new DefaultListModel<>();
+    private DefaultListModel<String> visitedModel = new DefaultListModel<>();
+    private DefaultListModel<String> pathModel = new DefaultListModel<>();
+    private JTextArea explanationArea;
+
+    // Animation / state
+    private List<AnimationStep> trace = Collections.emptyList();
+    private int traceIndex = 0;
+    private javax.swing.Timer autoTimer;
+    private boolean isPlaying = false;
     
     // Colors
-    public static final Color DEFAULT_NODE_COLOR = new Color(52, 152, 219); // Blue
-    public static final Color FRONTIER_NODE_COLOR = new Color(255, 193, 7); // Yellow/Orange
-    public static final Color VISITED_NODE_COLOR = new Color(108, 117, 125); // Gray (Closed Set)
-    public static final Color PATH_NODE_COLOR = new Color(40, 167, 69); // Green (Final Path)
-    public static final Color START_NODE_COLOR = new Color(111, 66, 193); // Purple for start
-    public static final Color GOAL_NODE_COLOR = new Color(220, 53, 69); // Red for goal
+    private static final Color COLOR_BG = new Color(248, 249, 250);
+    private static final Color COLOR_PANEL = Color.WHITE;
+    private static final Color COLOR_ACCENT = new Color(23, 162, 184);
+    private static final Color COLOR_START = new Color(111, 66, 193);
+    private static final Color COLOR_GOAL = new Color(220, 53, 69);
+    private static final Color COLOR_DEFAULT = new Color(52, 152, 219);
+    private static final Color COLOR_FRONTIER = new Color(255, 193, 7);
+    private static final Color COLOR_VISITED = new Color(108, 117, 125);
+    private static final Color COLOR_PATH = new Color(40, 167, 69);
+    private static final Color EDGE_DEFAULT = new Color(160, 160, 160);
+    private static final Color EDGE_HIGHLIGHT = new Color(23, 162, 184);
 
-    public static final Color DEFAULT_EDGE_COLOR = Color.GRAY;
-    public static final Color VISITED_EDGE_COLOR = new Color(0, 123, 255); // Brighter Blue
-    public static final Color PATH_EDGE_COLOR = new Color(25, 135, 84); // Darker Green
-    
+    // Visual maps
+    private Map<String, Point> nodePositions = new HashMap<>();
+    private Map<String, Color> nodeColors = new HashMap<>();
     private Map<String, Map<String, Color>> edgeColors = new HashMap<>();
 
     public GraphVisualizerSwing(Graph graph) {
         this.graph = graph;
-        initialize();
+        SwingUtilities.invokeLater(this::buildAndShow);
     }
 
-    private void initialize() {
-        frame = new JFrame("Graph Pathfinding Visualizer - Interactive Step-by-Step");
+    private void buildAndShow() {
+        frame = new JFrame("Graph Algorithm Visualizer");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        frame.setLayout(new BorderLayout(10, 10));
+        frame.setMinimumSize(new Dimension(1200, 800));
+        frame.getContentPane().setBackground(COLOR_BG);
+        frame.setLayout(new BorderLayout());
 
-        JPanel controlPanel = createControlPanel();
-        frame.add(controlPanel, BorderLayout.WEST);
+        // Header
+        JPanel header = createHeaderPanel();
+        frame.add(header, BorderLayout.NORTH);
 
-        // Center panel containing graph and explanation
-        JPanel centerPanel = new JPanel(new BorderLayout());
-        
-        // Graph panel with legend overlay
-        JLayeredPane layeredPane = new JLayeredPane();
-        layeredPane.setPreferredSize(new Dimension(1000, 600));
-        
-        // Graph panel
-        graphPanel = new JPanel() {
-            @Override
-            protected void paintComponent(Graphics g) {
-                super.paintComponent(g);
-                drawGraph(g);
-            }
-        };
-        graphPanel.setBounds(0, 0, 1000, 600);
-        graphPanel.setBackground(new Color(248, 249, 250));
-        layeredPane.add(graphPanel, JLayeredPane.DEFAULT_LAYER);
-        
-        // Add legend as overlay in top-right corner
-        JPanel legendPanel = createLegendPanel();
-        legendPanel.setBounds(820, 10, 170, 180); // Position in top-right
-        legendPanel.setOpaque(true);
-        layeredPane.add(legendPanel, JLayeredPane.PALETTE_LAYER);
-        
-        centerPanel.add(layeredPane, BorderLayout.CENTER);
-        
-        // Explanation Panel below graph
-        JPanel explanationPanel = new JPanel(new BorderLayout());
-        explanationPanel.setBorder(BorderFactory.createTitledBorder("Step Explanation"));
-        explanationText = new JTextArea(4, 80);
-        explanationText.setFont(new Font("Arial", Font.PLAIN, 12));
-        explanationText.setEditable(false);
-        explanationText.setBackground(new Color(255, 255, 240)); // Light yellow background
-        explanationText.setLineWrap(true);
-        explanationText.setWrapStyleWord(true);
-        explanationText.setText("Click an algorithm button to prepare the visualization, then use 'Next Step' to walk through the algorithm execution step by step.");
-        explanationPanel.add(new JScrollPane(explanationText), BorderLayout.CENTER);
-        explanationPanel.setPreferredSize(new Dimension(1000, 120));
-        
-        centerPanel.add(explanationPanel, BorderLayout.SOUTH);
-        frame.add(centerPanel, BorderLayout.CENTER);
+        // Main split: left canvas, right controls
+        JSplitPane mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT);
+        mainSplit.setResizeWeight(0.70);
+        mainSplit.setBorder(null);
 
-        JPanel statusPanel = new JPanel(new BorderLayout());
-        statusLabel = new JLabel("Ready to visualize graph algorithms");
-        progressBar = new JProgressBar();
-        progressBar.setPreferredSize(new Dimension(150, 16));
-        progressBar.setIndeterminate(false);
-        statusPanel.add(statusLabel, BorderLayout.CENTER);
-        statusPanel.add(progressBar, BorderLayout.EAST);
-        frame.add(statusPanel, BorderLayout.SOUTH);
+        // Canvas panel
+        canvas = new GraphCanvas();
+        JPanel canvasHolder = new JPanel(new BorderLayout());
+        canvasHolder.setBackground(COLOR_BG);
+        canvasHolder.add(canvas, BorderLayout.CENTER);
+        canvasHolder.setBorder(BorderFactory.createCompoundBorder(
+            new EmptyBorder(12, 12, 12, 6),
+            BorderFactory.createLineBorder(new Color(200, 200, 200))
+        ));
 
+        mainSplit.setLeftComponent(canvasHolder);
+
+        // Right side: controls and info
+        JPanel rightPanel = createRightPanel();
+        mainSplit.setRightComponent(rightPanel);
+
+        frame.add(mainSplit, BorderLayout.CENTER);
+
+        // Status bar
+        JPanel statusBar = createStatusBar();
+        frame.add(statusBar, BorderLayout.SOUTH);
+
+        // Wire up actions
+        setupEventHandlers();
+
+        // Initialize data
+        populateNodeCombos();
         initializeNodePositions();
+        updateUIFromGraph();
+
+        // Timer for autoplay
+        autoTimer = new javax.swing.Timer(speedSlider.getValue(), e -> {
+            if (traceIndex < trace.size()) stepOnce();
+            else togglePlayPause();
+        });
+        
+        speedSlider.addChangeListener(e -> {
+            autoTimer.setDelay(speedSlider.getValue());
+            lblSpeedValue.setText(speedSlider.getValue() + "ms");
+        });
+        
         frame.pack();
+        mainSplit.setDividerLocation((int)(frame.getWidth()*0.70));
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
     }
 
-    private JPanel createControlPanel() {
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        panel.setPreferredSize(new Dimension(350, 720)); // Adjusted height
-        panel.setBackground(new Color(233, 236, 239));
-        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+private JPanel createHeaderPanel() {
+        JPanel header = new JPanel(new BorderLayout());
+        header.setBackground(COLOR_BG);
+        header.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
 
-        JLabel title = new JLabel("Graph Algorithm Visualizer", JLabel.CENTER);
-        title.setFont(new Font("Arial", Font.BOLD, 18));
+        // --- 1. Left Panel (Title + Create Button) ---
+        // Use FlowLayout to arrange title and button side-by-side
+        JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 20, 0)); 
+        leftPanel.setBackground(COLOR_BG);
+        
+        // Title
+        JLabel title = new JLabel("Graph Algorithm Visualizer");
+        title.setFont(TITLE_FONT);
         title.setForeground(new Color(33, 37, 41));
-        title.setAlignmentX(Component.CENTER_ALIGNMENT);
-        panel.add(title);
-        panel.add(Box.createVerticalStrut(15));
+        leftPanel.add(title);
+        
+        // Create Graph Button
+        JButton createGraphBtn = new JButton("Create New Graph");
+        
+        // FIX: Set a reasonable width (e.g., 160) for the text to fit.
+        Dimension buttonSize = new Dimension(160, 35); 
+        createGraphBtn.setPreferredSize(buttonSize); 
+        
+        createGraphBtn.setFont(UI_FONT);
+        createGraphBtn.setBackground(new Color(108, 117, 125));
+        createGraphBtn.setForeground(Color.WHITE);
+        createGraphBtn.setFocusPainted(false);
+        createGraphBtn.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 12));
+        createGraphBtn.addActionListener(e -> openCreateGraphDialog());
 
-        // Node selection
-        JPanel nodePanel = new JPanel(new GridLayout(2, 2, 6, 6));
-        nodePanel.setBackground(panel.getBackground());
-        nodePanel.setBorder(BorderFactory.createTitledBorder("Select Nodes"));
-        startNodeCombo = new JComboBox<>();
-        goalNodeCombo = new JComboBox<>();
-        populateNodeCombos();
-        nodePanel.add(new JLabel("Start Node:"));
-        nodePanel.add(startNodeCombo);
-        nodePanel.add(new JLabel("Goal Node:"));
-        nodePanel.add(goalNodeCombo);
-        panel.add(nodePanel);
+        JButton openGraphBtn = new JButton("Open Graph...");
+        openGraphBtn.setPreferredSize(new Dimension(130, 35)); 
+        openGraphBtn.setFont(UI_FONT);
+        openGraphBtn.setBackground(new Color(40, 167, 69)); // Green for success/open
+        openGraphBtn.setForeground(Color.WHITE);
+        openGraphBtn.setFocusPainted(false);
+        openGraphBtn.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 12));
+        openGraphBtn.addActionListener(e -> openGraphFromFile());
+        leftPanel.add(openGraphBtn); 
 
-        panel.add(Box.createVerticalStrut(10));
-        panel.add(createAlgorithmPanel());
-        panel.add(Box.createVerticalStrut(10));
+        JButton saveGraphButton = new JButton("Save Graph");
         
-        // Step Control Panel
-        JPanel stepPanel = new JPanel(new BorderLayout());
-        stepPanel.setBorder(BorderFactory.createTitledBorder("Animation Control"));
-        nextStepButton = new JButton("▶ Start Animation (0/0)");
-        nextStepButton.setFont(new Font("Arial", Font.BOLD, 14));
-        nextStepButton.setBackground(new Color(23, 162, 184));
-        nextStepButton.setForeground(Color.WHITE);
-        nextStepButton.setEnabled(false);
-        nextStepButton.addActionListener(e -> stepThroughAnimation());
-        stepPanel.add(nextStepButton, BorderLayout.CENTER);
-        panel.add(stepPanel);
-        panel.add(Box.createVerticalStrut(10));
+        // FIX: Set a reasonable width (e.g., 160) for the text to fit. 
+        createGraphBtn.setPreferredSize(buttonSize); 
         
-        panel.add(createMetricsPanel());
-        panel.add(Box.createVerticalStrut(10));
+        saveGraphButton.setFont(UI_FONT);
+        saveGraphButton.setBackground(new Color(108, 117, 125));
+        saveGraphButton.setForeground(Color.WHITE);
+        saveGraphButton.setFocusPainted(false);
+        saveGraphButton.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 12));
+        saveGraphButton.addActionListener(e -> saveGraphToFile());
         
-        // Control buttons
-        JPanel controlButtons = new JPanel(new GridLayout(1, 2, 5, 5));
-        JButton resetButton = new JButton("⟳ Reset");
-        resetButton.setFont(new Font("Arial", Font.BOLD, 13));
-        resetButton.setBackground(new Color(220, 53, 69));
-        resetButton.setForeground(Color.WHITE);
-        resetButton.addActionListener(e -> resetVisualization());
+        leftPanel.add(createGraphBtn); 
+        leftPanel.add(saveGraphButton);
         
-        JButton autoPlayButton = new JButton("⏩ Auto Play");
-        autoPlayButton.setFont(new Font("Arial", Font.BOLD, 13));
-        autoPlayButton.setBackground(new Color(40, 167, 69));
-        autoPlayButton.setForeground(Color.WHITE);
-        // autoPlayButton.addActionListener(e -> autoPlayAnimation());
-        
-        controlButtons.add(resetButton);
-        controlButtons.add(autoPlayButton);
-        panel.add(controlButtons);
+        // Add the combined panel to the header's WEST region
+        header.add(leftPanel, BorderLayout.WEST); 
 
-        return panel;
+        // ----------------------------------------------------------------------
+        
+        // Algorithm selection panel (Right side - No changes needed here)
+        JPanel algoPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        algoPanel.setBackground(COLOR_BG);
+        algoPanel.add(new JLabel("Algorithm:"));
+
+        JComboBox<String> algoCombo = new JComboBox<>(new String[]{
+            "Breadth-First Search (BFS)", 
+            "Depth-First Search (DFS)", 
+            "Dijkstra's Algorithm",
+            "A* Search (Manhattan)",
+            "A* Search (Euclidean)"
+        });
+        algoCombo.setFont(UI_FONT);
+        algoPanel.add(algoCombo);
+
+        // Start/Goal selection
+        algoPanel.add(new JLabel("Start:"));
+        startCombo = new JComboBox<>(); // Initialization is correctly inside the method
+        startCombo.setFont(UI_FONT);
+        algoPanel.add(startCombo);
+        
+        algoPanel.add(new JLabel("Goal:"));
+        goalCombo = new JComboBox<>(); // Initialization is correctly inside the method
+        goalCombo.setFont(UI_FONT);
+        algoPanel.add(goalCombo);
+
+        JButton runBtn = new JButton("Run Algorithm");
+        runBtn.setFont(UI_FONT);
+        runBtn.setBackground(COLOR_ACCENT);
+        runBtn.setForeground(Color.WHITE);
+        runBtn.setFocusPainted(false);
+        runBtn.setBorder(BorderFactory.createEmptyBorder(6, 12, 6, 12));
+        algoPanel.add(runBtn);
+
+        header.add(algoPanel, BorderLayout.EAST);
+
+        // Wire algorithm run
+        runBtn.addActionListener(e -> {
+            String selectedAlgo = (String) algoCombo.getSelectedItem();
+            String algoKey = selectedAlgo.contains("BFS") ? "BFS" :
+                            selectedAlgo.contains("DFS") ? "DFS" :
+                            selectedAlgo.contains("Dijkstra") ? "Dijkstra" :
+                            selectedAlgo.contains("Manhattan") ? "A* (Manhattan)" : "A* (Euclidean)";
+            prepareAlgorithm(algoKey, runBtn);
+        });
+
+        return header;
     }
 
-    private JPanel createAlgorithmPanel() {
-        JPanel algoPanel = new JPanel(new GridLayout(5, 1, 6, 6));
-        algoPanel.setBackground(new Color(233, 236, 239));
-        algoPanel.setBorder(BorderFactory.createTitledBorder("Algorithms"));
 
-        JButton bfsButton = createStyledButton("BFS Traversal", new Color(0, 123, 255));
-        JButton dfsButton = createStyledButton("DFS Traversal", new Color(108, 117, 125));
-        JButton dijkstraButton = createStyledButton("Dijkstra's Algorithm", new Color(255, 193, 7));
-        JButton aStarMButton = createStyledButton("A* (Manhattan)", new Color(23, 162, 184));
-        JButton aStarEButton = createStyledButton("A* (Euclidean)", new Color(23, 162, 184).darker());
+    private JPanel createRightPanel() {
+        JPanel right = new JPanel();
+        right.setLayout(new BorderLayout(12, 12));
+        right.setBorder(new EmptyBorder(12, 6, 12, 12));
+        right.setBackground(COLOR_BG);
 
-        algoPanel.add(bfsButton);
-        algoPanel.add(dfsButton);
-        algoPanel.add(dijkstraButton);
-        algoPanel.add(aStarMButton);
-        algoPanel.add(aStarEButton);
-        return algoPanel;
+        // Playback controls
+        JPanel playback = createPlaybackPanel();
+        right.add(playback, BorderLayout.NORTH);
+
+        // Visualization queues
+        JPanel queuesPanel = createQueuesPanel();
+        right.add(queuesPanel, BorderLayout.CENTER);
+
+        // Explanation area
+        JPanel explanationPanel = createExplanationPanel();
+        right.add(explanationPanel, BorderLayout.SOUTH);
+
+        return right;
     }
 
-    private JButton createStyledButton(String text, Color baseColor) {
+    private JPanel createPlaybackPanel() {
+        JPanel playback = new JPanel(new GridBagLayout());
+        playback.setBackground(COLOR_PANEL);
+        playback.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createTitledBorder("Animation Controls"),
+            new EmptyBorder(8, 8, 8, 8)
+        ));
+
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(4, 4, 4, 4);
+
+        // First row: buttons
+        gbc.gridx = 0; gbc.gridy = 0; gbc.gridwidth = 1;
+        btnPlayPause = createControlButton("Play");
+        playback.add(btnPlayPause, gbc);
+
+        gbc.gridx = 1;
+        btnStep = createControlButton("Step");
+        playback.add(btnStep, gbc);
+
+        gbc.gridx = 2;
+        btnReset = createControlButton("Reset");
+        playback.add(btnReset, gbc);
+
+        // Second row: auto mode and speed
+        gbc.gridx = 0; gbc.gridy = 1;
+        playback.add(new JLabel("Auto Mode:"), gbc);
+
+        gbc.gridx = 1;
+        btnAuto = new JToggleButton("Off");
+        btnAuto.setFont(UI_FONT);
+        btnAuto.setFocusPainted(false);
+        playback.add(btnAuto, gbc);
+
+        gbc.gridx = 2;
+        playback.add(new JLabel("Speed:"), gbc);
+
+        // Third row: speed slider
+        gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 2;
+        speedSlider = new JSlider(100, 2000, 600);
+        speedSlider.setMajorTickSpacing(500);
+        speedSlider.setMinorTickSpacing(100);
+        speedSlider.setPaintTicks(true);
+        speedSlider.setPaintLabels(true);
+        playback.add(speedSlider, gbc);
+
+        gbc.gridx = 2; gbc.gridwidth = 1;
+        lblSpeedValue = new JLabel("600ms");
+        lblSpeedValue.setFont(UI_FONT);
+        playback.add(lblSpeedValue, gbc);
+
+        return playback;
+    }
+
+    private JPanel createQueuesPanel() {
+        JPanel queuesPanel = new JPanel(new GridLayout(3, 1, 8, 8));
+        queuesPanel.setBackground(COLOR_BG);
+
+        // Frontier queue
+        JPanel frontierPanel = createQueuePanel("Frontier Queue", frontierModel, COLOR_FRONTIER);
+        listFrontier = findListInPanel(frontierPanel);
+
+        // Visited nodes
+        JPanel visitedPanel = createQueuePanel("Visited Nodes", visitedModel, COLOR_VISITED);
+        listVisited = findListInPanel(visitedPanel);
+
+        // Final path
+        JPanel pathPanel = createQueuePanel("Final Path", pathModel, COLOR_PATH);
+        listPath = findListInPanel(pathPanel);
+
+        queuesPanel.add(frontierPanel);
+        queuesPanel.add(visitedPanel);
+        queuesPanel.add(pathPanel);
+
+        return queuesPanel;
+    }
+
+private JPanel createQueuePanel(String title, DefaultListModel<String> model, Color color) {
+    JPanel panel = new JPanel(new BorderLayout());
+    panel.setBackground(COLOR_BG);
+    
+    JLabel titleLabel = new JLabel(title);
+    titleLabel.setFont(TITLE_FONT);
+    titleLabel.setBorder(new EmptyBorder(0, 0, 4, 0));
+    panel.add(titleLabel, BorderLayout.NORTH);
+
+    JList<String> list = new JList<>(model);
+    list.setFont(UI_FONT);
+    list.setBackground(COLOR_PANEL);
+    list.setSelectionBackground(color.brighter());
+    list.setSelectionForeground(Color.BLACK);
+    
+    // 💡 THE CORRECTION: Set the JList to display elements horizontally.
+    list.setLayoutOrientation(JList.HORIZONTAL_WRAP); 
+    // Setting visible row count to 1 ensures it appears as a single, horizontal row.
+    list.setVisibleRowCount(1); 
+    
+    JScrollPane scrollPane = new JScrollPane(list);
+    scrollPane.setPreferredSize(new Dimension(200, 120));
+    scrollPane.setBorder(BorderFactory.createLineBorder(color, 2));
+    
+    // 💡 IMPORTANT: Ensure horizontal scrolling is enabled (and vertical is disabled).
+    scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
+    scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+    
+    panel.add(scrollPane, BorderLayout.CENTER);
+    return panel;
+}
+    @SuppressWarnings("unchecked")
+    private JList<String> findListInPanel(JPanel panel) {
+        for (Component c : panel.getComponents()) {
+            if (c instanceof JScrollPane) {
+                Component view = ((JScrollPane) c).getViewport().getView();
+                if (view instanceof JList) {
+                    return (JList<String>) view;
+                }
+            }
+        }
+        return null;
+    }
+
+    private JPanel createExplanationPanel() {
+        JPanel explanationPanel = new JPanel(new BorderLayout());
+        explanationPanel.setBackground(COLOR_BG);
+
+        JLabel title = new JLabel("Step-by-Step Explanation");
+        title.setFont(TITLE_FONT);
+        explanationPanel.add(title, BorderLayout.NORTH);
+
+        explanationArea = new JTextArea(6, 20);
+        explanationArea.setLineWrap(true);
+        explanationArea.setWrapStyleWord(true);
+        explanationArea.setEditable(false);
+        explanationArea.setFont(UI_FONT);
+        explanationArea.setBackground(COLOR_PANEL);
+        explanationArea.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(new Color(200, 200, 200)),
+            new EmptyBorder(8, 8, 8, 8)
+        ));
+
+        JScrollPane scrollPane = new JScrollPane(explanationArea);
+        explanationPanel.add(scrollPane, BorderLayout.CENTER);
+
+        return explanationPanel;
+    }
+
+    private JPanel createStatusBar() {
+        JPanel statusBar = new JPanel(new BorderLayout(8, 4));
+        statusBar.setBorder(new EmptyBorder(6, 12, 6, 12));
+        statusBar.setBackground(COLOR_BG);
+        
+        lblStatus = new JLabel("Ready to visualize graph algorithms");
+        lblStatus.setFont(UI_FONT);
+        statusBar.add(lblStatus, BorderLayout.WEST);
+
+        JLabel helpLabel = new JLabel("Space: Play/Pause | Right Arrow: Step | Mouse: Zoom/Pan");
+        helpLabel.setFont(UI_FONT.deriveFont(11f));
+        helpLabel.setForeground(Color.GRAY);
+        statusBar.add(helpLabel, BorderLayout.EAST);
+
+        return statusBar;
+    }
+
+    private JButton createControlButton(String text) {
         JButton button = new JButton(text);
+        button.setFont(UI_FONT);
         button.setFocusPainted(false);
-        button.setBackground(baseColor);
-        button.setForeground(Color.WHITE);
-        button.setFont(new Font("Arial", Font.BOLD, 13));
-        button.setAlignmentX(Component.CENTER_ALIGNMENT);
-        button.addActionListener(e -> runAlgorithm(text));
+        button.setBackground(COLOR_PANEL);
+        button.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(COLOR_ACCENT),
+            new EmptyBorder(6, 12, 6, 12)
+        ));
         return button;
     }
 
-    private JPanel createMetricsPanel() {
-        JPanel metricsPanel = new JPanel(new BorderLayout());
-        metricsPanel.setBorder(BorderFactory.createTitledBorder("Algorithm Results"));
-        metricsText = new JTextArea(6, 25);
-        metricsText.setFont(new Font("Consolas", Font.PLAIN, 12));
-        metricsText.setEditable(false);
-        metricsText.setBackground(new Color(255, 255, 255));
-        metricsPanel.add(new JScrollPane(metricsText), BorderLayout.CENTER);
-        return metricsPanel;
-    }
+    private void setupEventHandlers() {
+        btnPlayPause.addActionListener(e -> togglePlayPause());
+        btnStep.addActionListener(e -> stepOnce());
+        btnReset.addActionListener(e -> resetVisualization());
+        btnAuto.addActionListener(e -> toggleAutoMode());
 
-    private JPanel createLegendPanel() {
-        JPanel legend = new JPanel();
-        legend.setLayout(new BoxLayout(legend, BoxLayout.Y_AXIS));
-        legend.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(Color.DARK_GRAY, 2),
-            BorderFactory.createEmptyBorder(8, 8, 8, 8)
-        ));
-        legend.setBackground(new Color(255, 255, 255, 240)); // Semi-transparent white
+        // Keyboard shortcuts
+        frame.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+            .put(KeyStroke.getKeyStroke("SPACE"), "playpause");
+        frame.getRootPane().getActionMap().put("playpause", new AbstractAction() {
+            public void actionPerformed(ActionEvent e) { togglePlayPause(); }
+        });
         
-        JLabel title = new JLabel("Legend");
-        title.setFont(new Font("Arial", Font.BOLD, 14));
-        title.setAlignmentX(Component.LEFT_ALIGNMENT);
-        legend.add(title);
-        legend.add(Box.createVerticalStrut(5));
-        
-        legend.add(createLegendItem("Start Node", START_NODE_COLOR));
-        legend.add(createLegendItem("Goal Node", GOAL_NODE_COLOR));
-        legend.add(createLegendItem("Unexplored", DEFAULT_NODE_COLOR));
-        legend.add(createLegendItem("Frontier", FRONTIER_NODE_COLOR));
-        legend.add(createLegendItem("Explored", VISITED_NODE_COLOR));
-        legend.add(createLegendItem("Path", PATH_NODE_COLOR));
-        return legend;
-    }
-
-    private JPanel createLegendItem(String text, Color color) {
-        JPanel item = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 2));
-        item.setBackground(new Color(255, 255, 255, 0)); // Transparent
-        item.setAlignmentX(Component.LEFT_ALIGNMENT);
-        
-        // Color square
-        JPanel colorBox = new JPanel();
-        colorBox.setPreferredSize(new Dimension(16, 16));
-        colorBox.setBackground(color);
-        colorBox.setBorder(BorderFactory.createLineBorder(Color.BLACK, 1));
-        
-        JLabel textLabel = new JLabel(text);
-        textLabel.setFont(new Font("Arial", Font.PLAIN, 11));
-        
-        item.add(colorBox);
-        item.add(textLabel);
-        return item;
-    }
-
-    private void populateNodeCombos() {
-        Set<String> nodeNames = getNodeNamesFromGraph();
-        for (String name : nodeNames) {
-            startNodeCombo.addItem(name);
-            goalNodeCombo.addItem(name);
-        }
-        if (!nodeNames.isEmpty()) {
-            startNodeCombo.setSelectedIndex(0);
-            goalNodeCombo.setSelectedIndex(nodeNames.size() > 1 ? nodeNames.size() - 1 : 0);
-        }
+        frame.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+            .put(KeyStroke.getKeyStroke("RIGHT"), "step");
+        frame.getRootPane().getActionMap().put("step", new AbstractAction() {
+            public void actionPerformed(ActionEvent e) { stepOnce(); }
+        });
     }
 
     @SuppressWarnings("unchecked")
-    private Set<String> getNodeNamesFromGraph() {
-        Set<String> names = new HashSet<>();
+    private void populateNodeCombos() {
+        startCombo.removeAllItems();
+        goalCombo.removeAllItems();
         try {
-            java.lang.reflect.Field adjField = graph.getClass().getDeclaredField("adjacencyList");
+            Field adjField = graph.getClass().getDeclaredField("adjacencyList");
             adjField.setAccessible(true);
-            Map<Node, List<Edge>> adjacencyList = (Map<Node, List<Edge>>) adjField.get(graph);
-            for (Node node : adjacencyList.keySet()) {
-                names.add(node.getName());
+            Map<Node, List<Edge>> adjacency = (Map<Node, List<Edge>>) adjField.get(graph);
+            for (Node n : adjacency.keySet()) {
+                startCombo.addItem(n.getName());
+                goalCombo.addItem(n.getName());
             }
         } catch (Exception e) {
-            names.addAll(Arrays.asList("A", "B", "C", "D", "E"));
+            // fallback
+            startCombo.addItem("A");
+            startCombo.addItem("B");
+            goalCombo.addItem("C");
         }
-        return names;
+        if (startCombo.getItemCount() > 0) startCombo.setSelectedIndex(0);
+        if (goalCombo.getItemCount() > 1) goalCombo.setSelectedIndex(goalCombo.getItemCount()-1);
     }
 
+    @SuppressWarnings("unchecked")
     private void initializeNodePositions() {
+        nodePositions.clear();
+        nodeColors.clear();
+        edgeColors.clear();
         try {
-            java.lang.reflect.Field adjField = graph.getClass().getDeclaredField("adjacencyList");
+            Field adjField = graph.getClass().getDeclaredField("adjacencyList");
             adjField.setAccessible(true);
-            Map<Node, List<Edge>> adjacencyList = (Map<Node, List<Edge>>) adjField.get(graph);
-            
-            // LARGER: Increased scale and offsets for bigger graph
-            int scale = 120; // Increased from 80
-            int offsetX = 150; // Increased from 120
-            int offsetY = 120; // Increased from 80
-            
-            for (Node node : adjacencyList.keySet()) {
-                int x = node.getX() * scale + offsetX;
-                int y = node.getY() * scale + offsetY;
-                nodePositions.put(node.getName(), new Point(x, y));
-                
-                // Set start and goal node colors
-                String startNode = (String) startNodeCombo.getSelectedItem();
-                String goalNode = (String) goalNodeCombo.getSelectedItem();
-                if (node.getName().equals(startNode)) {
-                    nodeColors.put(node.getName(), START_NODE_COLOR);
-                } else if (node.getName().equals(goalNode)) {
-                    nodeColors.put(node.getName(), GOAL_NODE_COLOR);
-                } else {
-                    nodeColors.put(node.getName(), DEFAULT_NODE_COLOR);
-                }
-                
-                // Initialize edge colors
-                edgeColors.putIfAbsent(node.getName(), new HashMap<>());
-                for(Edge edge : adjacencyList.get(node)) {
-                    edgeColors.get(node.getName()).put(edge.getDestination().getName(), DEFAULT_EDGE_COLOR);
+            Map<Node, List<Edge>> adjacency = (Map<Node, List<Edge>>) adjField.get(graph);
+            int scale = 120;
+            int offsetX = 150;
+            int offsetY = 120;
+            for (Node n : adjacency.keySet()) {
+                int x = n.getX()*scale + offsetX;
+                int y = n.getY()*scale + offsetY;
+                nodePositions.put(n.getName(), new Point(x, y));
+                nodeColors.put(n.getName(), COLOR_DEFAULT);
+                edgeColors.putIfAbsent(n.getName(), new HashMap<>());
+                for (Edge e : adjacency.get(n)) {
+                    edgeColors.get(n.getName()).put(e.getDestination().getName(), EDGE_DEFAULT);
                 }
             }
+            // mark start/goal
+            if (startCombo.getSelectedItem()!=null) nodeColors.put((String)startCombo.getSelectedItem(), COLOR_START);
+            if (goalCombo.getSelectedItem()!=null) nodeColors.put((String)goalCombo.getSelectedItem(), COLOR_GOAL);
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-    private void drawGraph(Graphics g) {
-        Graphics2D g2d = (Graphics2D) g;
-        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2d.setStroke(new BasicStroke(3)); // Thicker lines for better visibility
-
-        try {
-            java.lang.reflect.Field adjField = graph.getClass().getDeclaredField("adjacencyList");
-            adjField.setAccessible(true);
-            Map<Node, List<Edge>> adjacencyList = (Map<Node, List<Edge>>) adjField.get(graph);
-
-            // Draw edges
-            for (Node from : adjacencyList.keySet()) {
-                for (Edge edge : adjacencyList.get(from)) {
-                    Node to = edge.getDestination();
-                    Point p1 = nodePositions.get(from.getName());
-                    Point p2 = nodePositions.get(to.getName());
-                    
-                    if (p1 != null && p2 != null) {
-                        Color edgeColor = edgeColors.getOrDefault(from.getName(), Collections.emptyMap())
-                                .getOrDefault(to.getName(), DEFAULT_EDGE_COLOR);
-                        g2d.setColor(edgeColor);
-                        g2d.drawLine(p1.x, p1.y, p2.x, p2.y);
-
-                        // Draw weight label with better positioning
-                        int midX = (p1.x + p2.x) / 2;
-                        int midY = (p1.y + p2.y) / 2;
-                        g2d.setColor(edgeColor.equals(DEFAULT_EDGE_COLOR) ? Color.RED.darker() : edgeColor.darker());
-                        g2d.setFont(new Font("Arial", Font.BOLD, 14)); // Larger font
-                        
-                        // Offset weight label to avoid overlap with line
-                        double angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-                        int labelX = midX + (int)(15 * Math.sin(angle));
-                        int labelY = midY - (int)(15 * Math.cos(angle));
-                        
-                        g2d.drawString(String.valueOf(edge.getWeight()), labelX, labelY);
-                    }
-                }
-            }
-
-            // Draw nodes (larger for better visibility)
-            for (Map.Entry<String, Point> entry : nodePositions.entrySet()) {
-                Point p = entry.getValue();
-                String name = entry.getKey();
-                
-                // Draw node circle (larger)
-                g2d.setColor(nodeColors.get(name));
-                g2d.fillOval(p.x - 20, p.y - 20, 40, 40); // Increased from 30 to 40
-                g2d.setColor(Color.BLACK);
-                g2d.drawOval(p.x - 20, p.y - 20, 40, 40);
-                
-                // Draw node label (larger font)
-                g2d.setColor(Color.WHITE);
-                g2d.setFont(new Font("Arial", Font.BOLD, 16)); // Increased from 14
-                FontMetrics fm = g2d.getFontMetrics();
-                int textWidth = fm.stringWidth(name);
-                g2d.drawString(name, p.x - textWidth/2, p.y + 6);
-            }
-        } catch (Exception e) {
-            g2d.drawString("Error drawing graph: " + e.getMessage(), 10, 20);
-        }
+    private void updateUIFromGraph() {
+        canvas.repaint();
+        lblStatus.setText("Graph loaded - ready for algorithm visualization");
     }
 
-    private void runAlgorithm(String algorithm) {
+    private void prepareAlgorithm(String algoName, JButton sourceButton) {
         resetVisualization();
-        
-        String startNodeName = (String) startNodeCombo.getSelectedItem();
-        String goalNodeName = (String) goalNodeCombo.getSelectedItem();
-
-        if (startNodeName == null || goalNodeName == null) {
-            statusLabel.setText("Please select both start and goal nodes.");
+        String start = (String) startCombo.getSelectedItem();
+        String goal = (String) goalCombo.getSelectedItem();
+        if (start == null || goal == null) {
+            lblStatus.setText("Please select start and goal nodes first.");
             return;
         }
-        
-        nextStepButton.setEnabled(false);
-        statusLabel.setText("Calculating " + algorithm + " trace...");
-        progressBar.setIndeterminate(true);
-        
-        // Update node colors for start and goal
-        initializeNodePositions(); // This will recolor start and goal nodes
+        lblStatus.setText("Computing " + algoName + " trace...");
+        autoTimer.stop();
+        isPlaying = false;
+        btnPlayPause.setText("Play");
 
+        // compute trace in background
         SwingWorker<Graph.AlgorithmTraceResult, Void> worker = new SwingWorker<>() {
             @Override
             protected Graph.AlgorithmTraceResult doInBackground() throws Exception {
-                Node start = findNodeByName(startNodeName);
-                Node goal = findNodeByName(goalNodeName);
-                
-                if (start == null || goal == null) return null;
-
-                switch (algorithm) {
-                    case "BFS Traversal":
-                        return graph.bfsWithTrace(start, goal);
-                    case "DFS Traversal":
-                        return graph.dfsWithTrace(start, goal);
-                    case "Dijkstra's Algorithm":
-                        return graph.dijkstraWithTrace(start, goal);
-                    case "A* (Manhattan)":
-                        return graph.aStarWithTrace(start, goal, "manhattan");
-                    case "A* (Euclidean)":
-                        return graph.aStarWithTrace(start, goal, "euclidean");
-                    default:
-                        return null;
+                Node s = findNodeByName(start);
+                Node g = findNodeByName(goal);
+                if (s==null || g==null) return null;
+                switch (algoName) {
+                    case "BFS": return graph.bfsWithTrace(s, g);
+                    case "DFS": return graph.dfsWithTrace(s, g);
+                    case "Dijkstra": return graph.dijkstraWithTrace(s, g);
+                    case "A* (Manhattan)": return graph.aStarWithTrace(s, g, "manhattan");
+                    case "A* (Euclidean)": return graph.aStarWithTrace(s, g, "euclidean");
+                    default: return null;
                 }
             }
 
             @Override
             protected void done() {
-                progressBar.setIndeterminate(false);
                 try {
-                    Graph.AlgorithmTraceResult result = get();
-                    if (result != null && !result.trace.isEmpty()) {
-                        currentTrace = (List<AnimationStep>) (List<?>) result.trace;
-                        currentStepIndex = 0;
-                        nextStepButton.setEnabled(true);
-                        nextStepButton.setText(String.format("▶ Step 1/%d", currentTrace.size()));
-                        statusLabel.setText("Trace ready! Click 'Next Step' to begin.");
-                        explanationText.setText("Algorithm trace prepared! Click 'Next Step' to start the step-by-step visualization.\n\n" +
-                                "We'll explore how " + algorithm + " finds the path from " + startNodeName + " to " + goalNodeName + ".");
-                        
-                        displayMetrics(algorithm, result.finalResult, result.finalPath);
+                    Graph.AlgorithmTraceResult res = get();
+                    if (res != null && res.trace != null && !res.trace.isEmpty()) {
+                        trace = (List<AnimationStep>) (List<?>) res.trace;
+                        traceIndex = 0;
+                        btnPlayPause.setEnabled(true);
+                        btnStep.setEnabled(true);
+                        frontierModel.clear(); visitedModel.clear(); pathModel.clear(); 
+                        explanationArea.setText("");
+                        lblStatus.setText("Trace ready - use Play/Step to visualize");
+                        displayMetrics(res.finalResult, res.finalPath);
                     } else {
-                        statusLabel.setText(algorithm + " failed or no path found.");
-                        explanationText.setText("No path found from " + startNodeName + " to " + goalNodeName + 
-                                " using " + algorithm + ". Try different nodes or check the graph connections.");
+                        lblStatus.setText("No path found or trace empty");
+                        explanationArea.setText("No path found from " + start + " to " + goal + ".");
                     }
                 } catch (Exception ex) {
-                    statusLabel.setText("Error executing algorithm: " + ex.getMessage());
-                    explanationText.setText("Error: " + ex.getMessage() + "\n\nCheck that all required methods are implemented in Graph.java.");
+                    lblStatus.setText("Failed to compute trace: " + ex.getMessage());
                     ex.printStackTrace();
                 }
             }
         };
         worker.execute();
     }
-    
+
+    private void displayMetrics(Object resultObj, List<Node> finalPath) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Algorithm Results:\n");
+        sb.append("Path: ").append(finalPath==null?"Not Found":finalPath).append("\n");
+        if (resultObj!=null) {
+            try {
+                Class<?> cls = resultObj.getClass();
+                Field costF = cls.getDeclaredField("cost");
+                Field visitedF = cls.getDeclaredField("visitedCount");
+                Field timeF = cls.getDeclaredField("timeNs");
+                costF.setAccessible(true); visitedF.setAccessible(true); timeF.setAccessible(true);
+                int cost = costF.getInt(resultObj);
+                int visited = visitedF.getInt(resultObj);
+                long timeNs = timeF.getLong(resultObj);
+                sb.append("Total Cost: ").append(cost==Integer.MAX_VALUE?"Infinity":cost).append("\n");
+                sb.append("Nodes Visited: ").append(visited).append("\n");
+                sb.append(String.format("Computation Time: %.3f ms", timeNs/1_000_000.0));
+            } catch (Exception e) {
+                sb.append("Path Length: ").append(finalPath==null?0:Math.max(0, finalPath.size()-1));
+            }
+        }
+        explanationArea.setText(sb.toString());
+    }
+
     @SuppressWarnings("unchecked")
     private Node findNodeByName(String name) {
         try {
-            java.lang.reflect.Field adjField = graph.getClass().getDeclaredField("adjacencyList");
+            Field adjField = graph.getClass().getDeclaredField("adjacencyList");
             adjField.setAccessible(true);
-            Map<Node, List<Edge>> adjacencyList = (Map<Node, List<Edge>>) adjField.get(graph);
-            for (Node node : adjacencyList.keySet()) {
-                if (node.getName().equals(name)) {
-                    return node;
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+            Map<Node, List<Edge>> adjacency = (Map<Node, List<Edge>>) adjField.get(graph);
+            for (Node n : adjacency.keySet()) if (n.getName().equals(name)) return n;
+        } catch (Exception e) { e.printStackTrace(); }
         return null;
     }
 
-    private void displayMetrics(String algorithm, Object resultObj, List<Node> path) {
-        StringBuilder metrics = new StringBuilder();
-        metrics.append("Algorithm: ").append(algorithm).append("\n");
-        metrics.append("Path: ").append(path == null || path.isEmpty() ? "Not Found" : path).append("\n");
-        
-        if (resultObj != null) {
-            try {
-                Class<?> cls = resultObj.getClass();
-                java.lang.reflect.Field costField = cls.getDeclaredField("cost");
-                java.lang.reflect.Field visitedField = cls.getDeclaredField("visitedCount");
-                java.lang.reflect.Field timeField = cls.getDeclaredField("timeNs");
-                costField.setAccessible(true);
-                visitedField.setAccessible(true);
-                timeField.setAccessible(true);
-                int cost = costField.getInt(resultObj);
-                int visited = visitedField.getInt(resultObj);
-                long timeNs = timeField.getLong(resultObj);
-                metrics.append("Cost: ").append(cost == Integer.MAX_VALUE ? "∞" : cost).append("\n");
-                metrics.append("Nodes Visited: ").append(visited).append("\n");
-                metrics.append(String.format("Time: %.3f ms\n", timeNs / 1_000_000.0));
-            } catch (Exception e) {
-                metrics.append("Length: ").append(path != null && path.size() > 0 ? path.size() - 1 : "0").append("\n");
-            }
+    private void togglePlayPause() {
+        if (trace.isEmpty()) return;
+        if (isPlaying) {
+            autoTimer.stop();
+            isPlaying = false;
+            btnPlayPause.setText("Play");
+            lblStatus.setText("Paused at step " + (traceIndex) + "/" + trace.size());
         } else {
-            metrics.append("Length: ").append(path != null && path.size() > 0 ? path.size() - 1 : "0").append("\n");
+            if (traceIndex >= trace.size()) { traceIndex = 0; resetVisualState(); }
+            isPlaying = true;
+            autoTimer.setDelay(speedSlider.getValue());
+            autoTimer.start();
+            btnPlayPause.setText("Pause");
+            lblStatus.setText("Playing animation...");
         }
-        
-        metricsText.setText(metrics.toString());
     }
 
-    // IMPROVED: Step Through Animation with Detailed Explanations
-    private void stepThroughAnimation() {
-        if (currentStepIndex >= currentTrace.size()) {
-            nextStepButton.setText("🎉 Animation Complete!");
-            nextStepButton.setEnabled(false);
-            statusLabel.setText("Algorithm execution finished!");
-            explanationText.setText("🎉 Algorithm completed successfully!\n\n" +
-                    "The final path has been highlighted in green. You can see the optimal route from start to goal.\n" +
-                    "Compare the results in the 'Algorithm Results' panel above.\n\n" +
-                    "Try running other algorithms to compare their performance!");
+    private void toggleAutoMode() {
+        if (btnAuto.isSelected()) {
+            btnAuto.setText("Auto: On");
+        } else {
+            btnAuto.setText("Auto: Off");
+        }
+    }
+
+    private void stepOnce() {
+        if (trace.isEmpty()) return;
+        if (traceIndex >= trace.size()) {
+            lblStatus.setText("Algorithm complete - total steps: " + trace.size());
+            btnPlayPause.setText("Play");
+            isPlaying = false;
+            autoTimer.stop();
             return;
         }
+        AnimationStep s = trace.get(traceIndex);
+        applyStepVisual(s);
+        explanationArea.setText(generateExplanationFor(s, traceIndex));
+        traceIndex++;
+        lblStatus.setText("Step " + traceIndex + " / " + trace.size());
+        canvas.repaint();
+    }
 
-        AnimationStep step = currentTrace.get(currentStepIndex);
-        
-        // Apply the visual change
+    private void applyStepVisual(AnimationStep step) {
         if (step.isNode) {
             nodeColors.put(step.nodeName, step.color);
+            if (step.color.equals(COLOR_FRONTIER)) {
+                frontierModel.addElement(step.nodeName);
+                // Auto-scroll to show latest addition
+                listFrontier.ensureIndexIsVisible(frontierModel.size() - 1);
+            }
+            if (step.color.equals(COLOR_VISITED)) {
+                visitedModel.addElement(step.nodeName);
+                listVisited.ensureIndexIsVisible(visitedModel.size() - 1);
+            }
+            if (step.color.equals(COLOR_PATH)) {
+                pathModel.addElement(step.nodeName);
+                listPath.ensureIndexIsVisible(pathModel.size() - 1);
+            }
         } else {
             edgeColors.putIfAbsent(step.edgeFrom, new HashMap<>());
             edgeColors.get(step.edgeFrom).put(step.edgeTo, step.color);
-            
-            // Update reverse edge for undirected graphs
-            if (edgeColors.containsKey(step.edgeTo) && edgeColors.get(step.edgeTo).containsKey(step.edgeFrom)) {
+            // undirected symmetry if present
+            if (edgeColors.containsKey(step.edgeTo)) {
                 edgeColors.get(step.edgeTo).put(step.edgeFrom, step.color);
             }
         }
-
-        // Generate detailed explanation based on the step
-        String detailedExplanation = generateStepExplanation(step, currentStepIndex);
-        
-        // Update UI
-        statusLabel.setText(String.format("Step %d/%d: %s", 
-            currentStepIndex + 1, currentTrace.size(), step.description));
-        nextStepButton.setText(String.format("▶ Step %d/%d", 
-            currentStepIndex + 1, currentTrace.size()));
-        explanationText.setText(detailedExplanation);
-        
-        graphPanel.repaint();
-        currentStepIndex++;
     }
 
-    // NEW: Generate detailed explanations for each step
-    private String generateStepExplanation(AnimationStep step, int stepIndex) {
-        StringBuilder explanation = new StringBuilder();
-        explanation.append("Step ").append(stepIndex + 1).append(": ").append(step.description).append("\n\n");
-        
+    private String generateExplanationFor(AnimationStep step, int idx) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Step ").append(idx+1).append(": ").append(step.description).append("\n\n");
         if (step.isNode) {
-            if (step.color.equals(FRONTIER_NODE_COLOR)) {
-                explanation.append("• This node has been added to the frontier (queue/stack/priority queue)\n");
-                explanation.append("• It's now waiting to be explored\n");
-                explanation.append("• The algorithm will examine this node's neighbors in future steps");
-            } else if (step.color.equals(VISITED_NODE_COLOR)) {
-                explanation.append("• This node has been fully explored\n");
-                explanation.append("• All its neighbors have been processed\n");
-                explanation.append("• It won't be visited again (closed set)");
-            } else if (step.color.equals(PATH_NODE_COLOR)) {
-                explanation.append("• This node is part of the final solution path\n");
-                explanation.append("• It contributes to the optimal route from start to goal");
+            if (step.color.equals(COLOR_FRONTIER)) {
+                sb.append("• Node added to frontier queue\n");
+                sb.append("• Will be explored in upcoming steps\n");
+            } else if (step.color.equals(COLOR_VISITED)) {
+                sb.append("• Node marked as visited\n");
+                sb.append("• All neighbors have been processed\n");
+            } else if (step.color.equals(COLOR_PATH)) {
+                sb.append("• Node confirmed as part of final path\n");
             }
         } else {
-            if (step.color.equals(VISITED_EDGE_COLOR)) {
-                explanation.append("• This edge is being explored\n");
-                explanation.append("• The algorithm is checking the connection between these nodes\n");
-                explanation.append("• It may lead to discovering new nodes or shorter paths");
-            } else if (step.color.equals(PATH_EDGE_COLOR)) {
-                explanation.append("• This edge is part of the final solution path\n");
-                explanation.append("• It represents a step in the optimal route");
+            if (step.color.equals(EDGE_DEFAULT)) {
+                sb.append("• Examining connection between nodes\n");
+            } else {
+                sb.append("• Edge identified as part of exploration path\n");
             }
         }
         
-        // Add algorithm-specific context
-        if (stepIndex == 0) {
-            explanation.append("\n\n💡 Tip: The algorithm starts from the beginning and systematically explores the graph.");
-        } else if (stepIndex == currentTrace.size() - 1) {
-            explanation.append("\n\n🎯 Final Step: The algorithm has completed and found the optimal path!");
+        if (idx == trace.size()-1) {
+            sb.append("\nAlgorithm completed - final path highlighted in green");
         }
-        
-        return explanation.toString();
+        return sb.toString();
     }
 
     private void resetVisualization() {
-        currentTrace = Collections.emptyList();
-        currentStepIndex = 0;
-        nextStepButton.setText("▶ Start Animation (0/0)");
-        nextStepButton.setEnabled(false);
-
-        // Reset all node colors
-        initializeNodePositions(); // This will reset colors including start/goal
-        
-        // Reset all edge colors
-        for (Map<String, Color> map : edgeColors.values()) {
-            map.replaceAll((k, v) -> DEFAULT_EDGE_COLOR);
-        }
-
-        metricsText.setText("");
-        statusLabel.setText("Visualization reset");
-        explanationText.setText("Ready to visualize! Select an algorithm to see how it finds paths in the graph.");
-        graphPanel.repaint();
+        trace = Collections.emptyList();
+        traceIndex = 0;
+        frontierModel.clear(); 
+        visitedModel.clear(); 
+        pathModel.clear();
+        btnPlayPause.setText("Play");
+        btnPlayPause.setEnabled(false);
+        btnStep.setEnabled(false);
+        autoTimer.stop(); 
+        isPlaying = false;
+        initializeNodePositions();
+        explanationArea.setText("Visualization reset. Select an algorithm to begin.");
+        canvas.repaint();
+        lblStatus.setText("Visualization reset");
     }
 
-    public static void launchVisualization(Graph graph) {
-        SwingUtilities.invokeLater(() -> new GraphVisualizerSwing(graph));
+    private void resetVisualState() {
+        // Reset per-step visuals but keep start/goal
+        for (String k : new ArrayList<>(nodeColors.keySet())) {
+            if (nodeColors.get(k).equals(COLOR_START) || nodeColors.get(k).equals(COLOR_GOAL)) continue;
+            nodeColors.put(k, COLOR_DEFAULT);
+        }
+        for (Map<String, Color> m : edgeColors.values()) {
+            m.replaceAll((a, b) -> EDGE_DEFAULT);
+        }
+        frontierModel.clear(); 
+        visitedModel.clear(); 
+        pathModel.clear();
+        canvas.repaint();
+    }
+
+    // Enhanced Canvas with zoom/pan and better visual feedback
+    private class GraphCanvas extends JPanel {
+        private double zoom = 1.0;
+        private double translateX = 0;
+        private double translateY = 0;
+        private Point lastDrag;
+
+        GraphCanvas() {
+            setPreferredSize(new Dimension(900, 640));
+            setBackground(COLOR_BG);
+            setBorder(BorderFactory.createLineBorder(new Color(200, 200, 200)));
+
+            addMouseWheelListener(e -> {
+                double delta = -e.getPreciseWheelRotation();
+                double factor = 1 + delta * 0.12;
+                zoom *= factor;
+                zoom = Math.max(0.25, Math.min(3.0, zoom));
+                repaint();
+            });
+
+            addMouseListener(new MouseAdapter() {
+                public void mousePressed(MouseEvent e) {
+                    lastDrag = e.getPoint();
+                }
+
+                public void mouseClicked(MouseEvent e) {
+                    Point2D p = screenToWorld(e.getPoint());
+                    String hit = findNodeAt(p.getX(), p.getY());
+                    if (hit != null) {
+                        explanationArea.setText("Selected Node: " + hit + 
+                                              "\nCoordinates: " + nodePositions.get(hit) +
+                                              "\nStatus: " + getNodeStatus(hit));
+                    }
+                }
+            });
+
+            addMouseMotionListener(new MouseMotionAdapter() {
+                public void mouseDragged(MouseEvent e) {
+                    Point cur = e.getPoint();
+                    translateX += (cur.x - lastDrag.x) / zoom;
+                    translateY += (cur.y - lastDrag.y) / zoom;
+                    lastDrag = cur;
+                    repaint();
+                }
+            });
+        }
+
+        private String findNodeAt(double x, double y) {
+            int r = 20;
+            for (Map.Entry<String, Point> en : nodePositions.entrySet()) {
+                Point p = en.getValue();
+                if (Math.hypot(p.x - x, p.y - y) <= r) return en.getKey();
+            }
+            return null;
+        }
+
+        private String getNodeStatus(String nodeName) {
+            Color color = nodeColors.get(nodeName);
+            if (color.equals(COLOR_START)) return "Start Node";
+            if (color.equals(COLOR_GOAL)) return "Goal Node";
+            if (color.equals(COLOR_FRONTIER)) return "In Frontier Queue";
+            if (color.equals(COLOR_VISITED)) return "Visited";
+            if (color.equals(COLOR_PATH)) return "In Final Path";
+            return "Unvisited";
+        }
+
+        private Point2D screenToWorld(Point p) {
+            double x = (p.x - getWidth()/2.0) / zoom - translateX + getWidth()/2.0 / zoom;
+            double y = (p.y - getHeight()/2.0) / zoom - translateY + getHeight()/2.0 / zoom;
+            return new Point2D.Double(x, y);
+        }
+
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2d = (Graphics2D) g.create();
+            g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            // Apply zoom and pan centered
+            AffineTransform at = new AffineTransform();
+            at.translate(getWidth()/2.0, getHeight()/2.0);
+            at.scale(zoom, zoom);
+            at.translate(-getWidth()/2.0 + translateX, -getHeight()/2.0 + translateY);
+            g2d.transform(at);
+
+            // Draw edges
+            g2d.setStroke(new BasicStroke(3f / (float)zoom));
+            try {
+                Field adjField = graph.getClass().getDeclaredField("adjacencyList");
+                adjField.setAccessible(true);
+                Map<Node, List<Edge>> adjacency = (Map<Node, List<Edge>>) adjField.get(graph);
+                for (Node from : adjacency.keySet()) {
+                    for (Edge edge : adjacency.get(from)) {
+                        Node to = edge.getDestination();
+                        Point p1 = nodePositions.get(from.getName());
+                        Point p2 = nodePositions.get(to.getName());
+                        if (p1==null||p2==null) continue;
+                        Color ec = EDGE_DEFAULT;
+                        if (edgeColors.containsKey(from.getName())) {
+                            ec = edgeColors.get(from.getName()).getOrDefault(to.getName(), EDGE_DEFAULT);
+                        }
+                        g2d.setColor(ec);
+                        g2d.drawLine(p1.x, p1.y, p2.x, p2.y);
+                        // weight label
+                        int midX = (p1.x + p2.x)/2;
+                        int midY = (p1.y + p2.y)/2;
+                        g2d.setFont(new Font("Arial", Font.BOLD, (int)(12/zoom)));
+                        g2d.setColor(Color.BLACK);
+                        g2d.drawString(String.valueOf(edge.getWeight()), midX+6, midY-6);
+                    }
+                }
+
+                // Draw nodes
+                for (Map.Entry<String, Point> en : nodePositions.entrySet()) {
+                    Point p = en.getValue();
+                    String name = en.getKey();
+                    Color c = nodeColors.getOrDefault(name, COLOR_DEFAULT);
+                    int rad = (int)(22 / zoom);
+                    
+                    // Node shadow for depth
+                    g2d.setColor(new Color(0, 0, 0, 30));
+                    g2d.fillOval(p.x-rad+2, p.y-rad+2, rad*2, rad*2);
+                    
+                    // Main node
+                    g2d.setColor(c);
+                    g2d.fillOval(p.x-rad, p.y-rad, rad*2, rad*2);
+                    
+                    // Node border
+                    g2d.setColor(Color.BLACK);
+                    g2d.setStroke(new BasicStroke(1.5f/(float)zoom));
+                    g2d.drawOval(p.x-rad, p.y-rad, rad*2, rad*2);
+                    
+                    // Node label
+                    g2d.setColor(Color.WHITE);
+                    g2d.setFont(new Font("Arial", Font.BOLD, (int)(14/zoom)));
+                    FontMetrics fm = g2d.getFontMetrics();
+                    int tw = fm.stringWidth(name);
+                    g2d.drawString(name, p.x - tw/2, p.y + fm.getAscent()/2 - 2);
+                }
+            } catch (Exception e) {
+                g2d.setColor(Color.RED);
+                g2d.drawString("Error drawing graph: " + e.getMessage(), 10, 20);
+            }
+            g2d.dispose();
+        }
+    }
+
+
+    private void openCreateGraphDialog() {
+    JDialog dialog = new JDialog(frame, "Create New Graph", true);
+    dialog.setSize(600, 450);
+    dialog.setLocationRelativeTo(frame);
+    dialog.setLayout(new BorderLayout(10, 10));
+
+    // Top panel: node/edge counts
+    JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
+    JTextField nodeCountField = new JTextField(5);
+    JTextField edgeCountField = new JTextField(5);
+    JButton generateFieldsBtn = new JButton("Generate Fields");
+
+    topPanel.add(new JLabel("Nodes:"));
+    topPanel.add(nodeCountField);
+    topPanel.add(new JLabel("Edges:"));
+    topPanel.add(edgeCountField);
+    topPanel.add(generateFieldsBtn);
+    dialog.add(topPanel, BorderLayout.NORTH);
+
+    // Center panel: tabs for nodes and edges
+    JTabbedPane tabbedPane = new JTabbedPane();
+    JPanel nodePanel = new JPanel(new BorderLayout());
+    JPanel edgePanel = new JPanel(new BorderLayout());
+    tabbedPane.addTab("Nodes", nodePanel);
+    tabbedPane.addTab("Edges", edgePanel);
+    dialog.add(tabbedPane, BorderLayout.CENTER);
+
+    // Bottom panel: create/cancel buttons
+    JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+    JButton createBtn = new JButton("Create Graph");
+    JButton cancelBtn = new JButton("Cancel");
+    bottomPanel.add(cancelBtn);
+    bottomPanel.add(createBtn);
+    dialog.add(bottomPanel, BorderLayout.SOUTH);
+
+    // Table models
+    DefaultTableModel nodeTableModel = new DefaultTableModel(new Object[]{"Node Name"}, 0);
+    JTable nodeTable = new JTable(nodeTableModel);
+    nodePanel.add(new JScrollPane(nodeTable), BorderLayout.CENTER);
+
+    DefaultTableModel edgeTableModel = new DefaultTableModel(new Object[]{"From", "To", "Weight"}, 0);
+    JTable edgeTable = new JTable(edgeTableModel);
+    edgePanel.add(new JScrollPane(edgeTable), BorderLayout.CENTER);
+
+    // Generate fields
+    generateFieldsBtn.addActionListener(e -> {
+        try {
+            int numNodes = Integer.parseInt(nodeCountField.getText().trim());
+            int numEdges = Integer.parseInt(edgeCountField.getText().trim());
+
+            nodeTableModel.setRowCount(0);
+            edgeTableModel.setRowCount(0);
+
+            for (int i = 0; i < numNodes; i++) {
+                nodeTableModel.addRow(new Object[]{(i + 1)});
+            }
+            for (int i = 0; i < numEdges; i++) {
+                edgeTableModel.addRow(new Object[]{"", "", "1"});
+            }
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(dialog, "Please enter valid numbers!", "Input Error", JOptionPane.ERROR_MESSAGE);
+        }
+    });
+
+    // Create graph
+    createBtn.addActionListener(e -> {
+        try {
+            int numNodes = nodeTableModel.getRowCount();
+            int numEdges = edgeTableModel.getRowCount();
+
+            Graph g = new Graph();
+            Map<String, Node> nodeMap = new HashMap<>();
+
+            // Layout nodes
+            if (numNodes <= 8) {
+                double centerX = 5.0, centerY = 5.0, radius = 3.0;
+                for (int i = 0; i < numNodes; i++) {
+                    String name = nodeTableModel.getValueAt(i, 0).toString().trim();
+                    double angle = 2 * Math.PI * i / numNodes;
+                    int x = (int) (centerX + radius * Math.cos(angle));
+                    int y = (int) (centerY + radius * Math.sin(angle));
+                    Node node = new Node(name, x, y);
+                    g.addNode(node);
+                    nodeMap.put(name, node);
+                }
+            } else {
+                int cols = (int) Math.ceil(Math.sqrt(numNodes));
+                double spacing = 2.0;
+                for (int i = 0; i < numNodes; i++) {
+                    String name = nodeTableModel.getValueAt(i, 0).toString().trim();
+                    int row = i / cols, col = i % cols;
+                    Node node = new Node(name, (int) (col * spacing), (int) (row * spacing));
+                    g.addNode(node);
+                    nodeMap.put(name, node);
+                }
+            }
+
+            for (int i = 0; i < numEdges; i++) {
+    // 1. Get raw values safely, handling potential nulls from empty cells
+    Object fromObj = edgeTableModel.getValueAt(i, 0);
+    Object toObj = edgeTableModel.getValueAt(i, 1);
+    Object weightObj = edgeTableModel.getValueAt(i, 2);
+
+    // 2. Crucial: Check for incomplete/empty rows
+if (fromObj == null || toObj == null || weightObj == null || 
+        fromObj.toString().trim().isEmpty() || 
+        toObj.toString().trim().isEmpty() || 
+        weightObj.toString().trim().isEmpty()) {
+        
+        // If the row is incomplete, treat it as an error
+        JOptionPane.showMessageDialog(dialog, 
+            "Row " + (i + 1) + " is incomplete. Please fill all fields or remove the row.", 
+            "Input Required", JOptionPane.WARNING_MESSAGE);
+        return; // Stop processing and force the user to correct the table.
+    }
+
+    String from = fromObj.toString().trim();
+    String to = toObj.toString().trim();
+    int weight;
+    
+    // 3. Robust Weight Parsing
+    try {
+        weight = Integer.parseInt(weightObj.toString().trim());
+    } catch (NumberFormatException ex) {
+        // Report an error for invalid weight and stop graph creation
+        JOptionPane.showMessageDialog(dialog, 
+            "Invalid weight for edge " + (i + 1) + ". Weight must be an integer.", 
+            "Input Error", JOptionPane.ERROR_MESSAGE);
+        return; // Stop the action listener and don't dispose the dialog
+    }
+
+    Node fromNode = nodeMap.get(from);
+    Node toNode = nodeMap.get(to);
+
+    if (fromNode != null && toNode != null) {
+        g.addUndirectedEdge(fromNode, toNode, weight);
+    } else {
+        // Report an error for invalid node and stop graph creation
+        JOptionPane.showMessageDialog(dialog, 
+            "Invalid node names for edge " + (i + 1) + ". Check that nodes '" + from + "' and '" + to + "' exist.", 
+            "Edge Error", JOptionPane.ERROR_MESSAGE);
+        return; // Stop the action listener and don't dispose the dialog
+    }
+}
+
+            // Finalize
+            refreshGraph(g);
+            populateNodeCombos();
+            dialog.dispose();
+
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(dialog, "Error creating graph: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    });
+
+    cancelBtn.addActionListener(e -> dialog.dispose());
+    dialog.setVisible(true);
+}
+
+
+private Graph buildGraphFromUserInput(int numNodes, int numEdges) {
+    Graph g = new Graph();
+    Map<String, Node> nodeMap = new HashMap<>();
+    boolean useCircleLayout = numNodes <= 8;
+
+    // Node input
+    for (int i = 0; i < numNodes; i++) {
+        String name = JOptionPane.showInputDialog(null, "Enter name for Node " + (i + 1) + ":");
+        if (name == null || name.trim().isEmpty()) name = "N" + (i + 1);
+        name = name.trim().toUpperCase();
+
+        int x, y;
+        if (useCircleLayout) {
+            double angle = 2 * Math.PI * i / numNodes;
+            x = (int) (5.0 + 3.0 * Math.cos(angle));
+            y = (int) (5.0 + 3.0 * Math.sin(angle));
+        } else {
+            int cols = (int) Math.ceil(Math.sqrt(numNodes));
+            double spacing = 2.0;
+            int row = i / cols, col = i % cols;
+            x = (int) (col * spacing);
+            y = (int) (row * spacing);
+        }
+
+        Node node = new Node(name, x, y);
+        g.addNode(node);
+        nodeMap.put(name, node);
+    }
+
+    // Edge input
+    for (int i = 0; i < numEdges; i++) {
+        JPanel edgePanel = new JPanel(new GridLayout(0, 2, 5, 5));
+        JTextField fromField = new JTextField();
+        JTextField toField = new JTextField();
+        JTextField weightField = new JTextField("1");
+
+        edgePanel.add(new JLabel("From Node:"));
+        edgePanel.add(fromField);
+        edgePanel.add(new JLabel("To Node:"));
+        edgePanel.add(toField);
+        edgePanel.add(new JLabel("Weight:"));
+        edgePanel.add(weightField);
+
+        int res = JOptionPane.showConfirmDialog(null, edgePanel, "Edge " + (i + 1), JOptionPane.OK_CANCEL_OPTION);
+        if (res == JOptionPane.OK_OPTION) {
+            try {
+                String from = fromField.getText().trim().toUpperCase();
+                String to = toField.getText().trim().toUpperCase();
+                int weight = Integer.parseInt(weightField.getText().trim());
+
+                Node fromNode = nodeMap.get(from);
+                Node toNode = nodeMap.get(to);
+
+                if (fromNode != null && toNode != null) {
+                    g.addUndirectedEdge(fromNode, toNode, weight);
+                } else {
+                    JOptionPane.showMessageDialog(null, "Invalid node names for edge " + (i + 1));
+                    i--; // retry
+                }
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(null, "Invalid weight value. Please enter a number.");
+                i--; // retry
+            }
+        } else {
+            i--; // retry if canceled
+        }
+    }
+
+    return g;
+}
+
+private void refreshGraph(Graph newGraph) {
+    this.graph = newGraph;
+    initializeNodePositions();   // reset node positions/colors
+    updateUIFromGraph();         // repaint canvas and update status
+}
+
+private void openGraphFromFile() {
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Open Graph");
+        fileChooser.setFileFilter(new FileNameExtensionFilter("JSON Files (*.json)", "json"));
+
+        int userSelection = fileChooser.showOpenDialog(frame);
+
+        if (userSelection == JFileChooser.APPROVE_OPTION) {
+            File fileToOpen = fileChooser.getSelectedFile();
+            
+            try {
+                // Call the core serialization logic to load the graph
+                Graph loadedGraph = GraphSerializer.load(fileToOpen);
+                
+                if (loadedGraph != null) {
+                    refreshGraph(loadedGraph);
+                    populateNodeCombos(); // Update dropdowns with new nodes
+                    JOptionPane.showMessageDialog(frame, "Graph loaded successfully from:\n" + fileToOpen.getName(), "Success", JOptionPane.INFORMATION_MESSAGE);
+                } else {
+                    JOptionPane.showMessageDialog(frame, "The file could not be parsed or was empty.", "Load Failed", JOptionPane.ERROR_MESSAGE);
+                }
+
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(frame, 
+                    "Error loading graph: " + ex.getMessage() + "\nFile may be corrupted or in an incorrect format.", 
+                    "Load Failed", JOptionPane.ERROR_MESSAGE);
+                ex.printStackTrace();
+            }
+        }
+    }
+    
+    // --- Save Graph Method (for completeness) ---
+    private void saveGraphToFile() {
+        if (this.graph == null || this.graph.getNodes().isEmpty()) {
+            JOptionPane.showMessageDialog(frame, "The current graph is empty. Nothing to save.", "Save Error", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Save Graph");
+        fileChooser.setSelectedFile(new File("custom_graph.json"));
+        fileChooser.setFileFilter(new FileNameExtensionFilter("JSON Files (*.json)", "json"));
+
+        int userSelection = fileChooser.showSaveDialog(frame);
+
+        if (userSelection == JFileChooser.APPROVE_OPTION) {
+            File fileToSave = fileChooser.getSelectedFile();
+            if (!fileToSave.getName().toLowerCase().endsWith(".json")) {
+                fileToSave = new File(fileToSave.getAbsolutePath() + ".json");
+            }
+            
+            try {
+                GraphSerializer.save(this.graph, fileToSave);
+                JOptionPane.showMessageDialog(frame, "Graph saved successfully to:\n" + fileToSave.getAbsolutePath(), "Success", JOptionPane.INFORMATION_MESSAGE);
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(frame, "Error saving graph: " + ex.getMessage(), "Save Failed", JOptionPane.ERROR_MESSAGE);
+                ex.printStackTrace();
+            }
+        }
+    }
+
+    // ---- utility / entrypoint ----
+    public static void launch(Graph graph) {
+        new GraphVisualizerSwing(graph);
     }
 }
