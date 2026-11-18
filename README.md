@@ -7,8 +7,8 @@ A robust Java-based application and visualizer for exploring and comparing class
 
 ![Graph Algorithm Visualizer](screenshots/graph-visualizer.png)
 
-*Interactive Graph Algorithm Visualizer showing BFS execution,
-frontier queue, visited nodes, and the final path.*
+Interactive Graph Algorithm Visualizer showing BFS execution,
+frontier queue, visited nodes, and the final path.
 ---
 ## Features
 
